@@ -307,6 +307,108 @@ class Wiggler(BendingMagnet):
             self.num_periods
 
 
+class SpectraSource(OpticalElement):
+
+    """ SpectraSource
+        (Abstract source type allowing for SPECTRA files used as source)
+    """
+
+    def __init__(self, spectra_file, sample_distance, size, pixel_size, trajectory, phase_profile='plane'):
+
+        super(SpectraSource, self).__init__()
+        self.spectra_file = spectra_file
+        self.sample_distance = sample_distance.simplified
+        self.pixel_size = make_tuple(pixel_size, num_dims=2)
+        self.size = size.simplified
+        self.trajectory = trajectory
+        self._phase_profile = None
+        self.phase_profile = phase_profile
+
+    @property
+    def phase_profile(self):
+        return self._phase_profile
+
+    @phase_profile.setter
+    def phase_profile(self, phase_profile):
+        if phase_profile not in ['plane', 'parabola', 'sphere']:
+            raise XRaySourceError("Unknown phase profile: '{}'".format(phase_profile))
+        self._phase_profile = phase_profile
+
+    def get_next_time(self, t_0, distance):
+        """Get the next time when the source will have moved more than *distance*."""
+        return self.trajectory.get_next_time(t_0)
+
+    def _transfer(self, shape, pixel_size, energy, offset, exponent=False, t=None, queue=None,
+                  out=None, check=True, block=False):
+        """Compute the flat field wavefield. Returned *out* array is different from the input one."""
+        if queue is None:
+            queue = cfg.OPENCL.queue
+
+        ps = make_tuple(pixel_size)
+        if t is None:
+            x, y, z = self.trajectory.control_points.simplified.magnitude[0]
+        else:
+            x, y, z = self.trajectory.get_point(t).simplified.magnitude
+        x += offset[1].simplified.magnitude
+        y += offset[0].simplified.magnitude
+        center = (x, y, z)
+        cl_center = gutil.make_vfloat3(*center)
+        cl_ps = gutil.make_vfloat2(*pixel_size.simplified.magnitude[::-1])
+        fov = np.arange(0, shape[0]) * ps[0] - y * q.m
+        angles = np.arctan((fov / self.sample_distance).simplified)
+        profile = self._load_vertical_profile().magnitude
+
+        profile = cl_array.to_device(queue, profile.astype(cfg.PRECISION.np_float))
+        if out is None:
+            out = cl_array.Array(queue, shape, dtype=cfg.PRECISION.np_cplx)
+
+        z_sample = self.sample_distance.simplified.magnitude
+        lam = energy_to_wavelength(energy).simplified.magnitude
+        phase = self.phase_profile != 'plane'
+        parabola = self.phase_profile == 'parabola'
+        if exponent or check and phase:
+            ev = cfg.OPENCL.programs['physics'].make_flat_2d(queue,
+                                                          shape[::-1],
+                                                          None,
+                                                          out.data,
+                                                          profile.data,
+                                                          cl_center,
+                                                          cl_ps,
+                                                          cfg.PRECISION.np_float(z_sample),
+                                                          cfg.PRECISION.np_float(lam),
+                                                          np.int32(True),
+                                                          np.int32(phase),
+                                                          np.int32(parabola))
+            if check and phase and not is_wavefield_sampling_ok(out, queue=queue):
+                LOG.error('Insufficient beam phase sampling')
+            if not exponent:
+                out = clmath.exp(out, queue=queue)
+        else:
+            ev = cfg.OPENCL.programs['physics'].make_flat_2d(queue,
+                                                          shape[::-1],
+                                                          None,
+                                                          out.data,
+                                                          profile.data,
+                                                          cl_center,
+                                                          cl_ps,
+                                                          cfg.PRECISION.np_float(z_sample),
+                                                          cfg.PRECISION.np_float(lam),
+                                                          np.int32(exponent),
+                                                          np.int32(phase),
+                                                          np.int32(parabola))
+
+        if block:
+            ev.wait()
+
+        return out
+
+    def _load_vertical_profile(self):
+        angle_step = np.arctan(self.pixel_size.simplified[0] / self.sample_distance.simplified)
+        result = np.loadtxt(self.spectra_file, skiprows = 10, usecols = [2]) / q.s * angle_step * 0.0001
+
+        return result
+
+
 class XRaySourceError(Exception):
     """X-ray source related exceptions."""
     pass

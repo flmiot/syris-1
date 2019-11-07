@@ -145,6 +145,49 @@ void make_flat_field(__global vcomplex *output,
 }
 
 /*
+ * Make flat field wavefield out of 2d profile of intensities.
+ */
+__kernel void make_flat_2d(__global vcomplex *output,
+                        __global vfloat *input,
+                        const vfloat3 center,
+                        const vfloat2 pixel_size,
+                        const vfloat z,
+                        const vfloat lambda,
+                        const int exponent,
+                        const int phase,
+                        const int parabola) {
+	int ix = get_global_id(0);
+	int iy = get_global_id(1);
+    vfloat x, y, c_phi, s_phi, r, real, imag;
+    vfloat amplitude;
+    amplitude = sqrt(input[iy * get_global_size(0) + ix]);
+
+    if (phase) {
+        x = ix * pixel_size.x - center.x;
+        y = iy * pixel_size.y - center.y;
+        if (parabola) {
+            r = (x * x + y * y) / (2 * z);
+        }
+        else {
+            r = sqrt(x * x + y * y + z * z);
+        }
+    } else {
+        r = 0;
+    }
+
+    if (exponent) {
+        real = log(amplitude);
+        imag = 2 * M_PI / lambda * r;
+    } else {
+        s_phi = sincos(2 * M_PI / lambda * r, &c_phi);
+        real = amplitude * c_phi;
+        imag = amplitude * s_phi;
+    }
+
+    output[iy * get_global_size(0) + ix] = (vfloat2)(real, imag);
+}
+
+/*
  * Make flat field wavefield out of a scalar intensity value.
  */
 __kernel void make_flat_from_scalar(__global vcomplex *output,
