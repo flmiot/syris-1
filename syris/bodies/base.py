@@ -472,6 +472,18 @@ class CompositeBody(MovableBody):
                 local_shift += shift
             body.rotate(angle, vec, shift=local_shift)
 
+
+    def rotate_all_mesh_triangles(self, angle, vec):
+        # Dirty fix to rotate mesh objects with stationary trajectory
+        # Should instead be fixed with better suited trajectory class
+        for body in self._bodies:
+            body.clear_transformation()
+            body.rotate(angle, vec)
+            body.transform()
+            body._triangles = np.copy(body._current)
+            body.update_projection_cache()
+
+
     def move(self, abs_time):
         """Move to a position of the body in time *abs_time*."""
         # Move the whole body.
