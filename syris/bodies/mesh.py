@@ -1,6 +1,7 @@
 """Bodies made from mesh."""
 import itertools
 import re
+import xml
 import numpy as np
 import pyopencl as cl
 import pyopencl.array as cl_array
@@ -367,3 +368,63 @@ def make_cube():
         triangles = np.concatenate((triangles, shifted), axis=1)
 
     return triangles * q.m
+
+
+def read_collada( filename, units ):
+
+    """ Read collada (*.dae) scene file. Returns list with objects of type Mesh."""
+
+    e = xml.etree.ElementTree.parse(filename).getroot()
+    ns = {'co': 'http://www.collada.org/2005/11/COLLADASchema'}
+    geometries = e.findall('co:library_geometries/co:geometry', ns)
+    visual_scene = e.find('co:library_visual_scenes/co:visual_scene', ns)
+    animations = e.find('cp:library_animations/co:animation')
+    tris = []
+
+    for g in geometries:
+        geom_name = g.get("id")[:-5]
+        m = g.find('co:mesh', ns)
+        arrays = m.findall("co:source/co:float_array",ns)
+        pattern = re.compile(r'(?P<x>[0-9e.-]*) (?P<y>[0-9e.-]*) (?P<z>[0-9e.-]*) ')
+        vstr = arrays[0].text + " "
+        vertices = np.array(re.findall(pattern, vstr)).astype(np.float32)
+        polylistr = m.find('co:polylist/co:p', ns).text + " "
+        faces = np.array(polylistr.split()[::2]).astype(np.int)
+        triangles = vertices[faces]
+
+        # apply static transformations
+        arg = "co:node[@name='" + geom_name + "']"
+        trafos = visual_scene.find(arg,ns)
+        rotZ = float(trafos.find("co:rotate[@sid='rotationZ']", ns).text.split()[-1])
+        rotY = float(trafos.find("co:rotate[@sid='rotationY']", ns).text.split()[-1])
+        rotX = float(trafos.find("co:rotate[@sid='rotationX']", ns).text.split()[-1])
+        matr_x = geom.rotate(rotX * q.deg, geom.X_AX)
+        matr_y = geom.rotate(rotY * q.deg, geom.Y_AX)
+        matr_z = geom.rotate(rotZ * q.deg, geom.Z_AX)
+        trans = trafos.find('co:translate', ns)
+        trans = np.array(trans.text.split()).astype(np.float32)
+        matt = geom.translate( trans * q.m )
+        mat = np.dot(matt, matr_z)
+        mat = np.dot(mat, matr_y)
+        mat = np.dot(mat, matr_x)
+
+        for i, vert in enumerate(triangles):
+            vert = (tuple(vert) + (1,))
+            triangles[i] = np.dot(mat, vert)[:-1]
+
+        tris = triangles.transpose()
+
+        # handle materials
+        material = m.find('co:polylist', ns).get("material")[:-9] + ".mat"
+        m = get_material( material )
+        # yuhuu:)
+        tr = Trajectory([(256/2,256/2,0)] * 12 * q.um)
+        c = [(0,0,0)] * q.m
+        #mesh = Mesh(triangles * units, tr, material = m, center = c)
+        #Meshes.extend([ mesh ])
+
+        # Animation data
+        library_animations
+
+
+    return tris
