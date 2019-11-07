@@ -116,7 +116,7 @@ class Camera(object):
         # Adjust dark current for later binning and gain
         dark = float(self.dark_current) / self._bin_factor[0] / self._bin_factor[1]
         electrons = dark + gutil.get_host(photons)
-
+        
         if self._bin_factor != (1, 1):
             if psf:
                 sigma = (fwnm_to_sigma(self._bin_factor[0]), fwnm_to_sigma(self._bin_factor[1]))
@@ -151,3 +151,32 @@ def make_pco_dimax():
     # Use a power of two padded value so that it's easier to use with FFT
     return Camera(11 * q.um, 0.1, 530., 23., 12, (2048, 2048),
                   quantum_efficiencies=qe, wavelengths=lam)
+
+
+def make_ehd_sc09000(exp_time):
+    """Make a camera with KAF-09000 chip (CCD)."""
+    lam, qe = np.load(pkg_resources.resource_filename(__name__,
+                                                      'data/ehd_quantum_efficiencies.npy'))
+    lam = lam * q.m
+    dark_current = (160 / q.s * exp_time).simplified.magnitude
+    return Camera(12 * q.um, .1, dark_current, 23., 16, (256, 2048), exp_time=exp_time , fps = 1 / exp_time,
+                    quantum_efficiencies=qe, wavelengths=lam, dtype=np.uint16)
+
+def make_ehd_sc09000_tile(exp_time):
+    """Make a camera with KAF-09000 chip (CCD)."""
+    lam, qe = np.load(pkg_resources.resource_filename(__name__,
+                                                      'data/ehd_quantum_efficiencies.npy'))
+    lam = lam * q.m
+    dark_current = (160 / q.s * exp_time).simplified.magnitude
+    return Camera(12 * q.um, .1, dark_current, 23., 16, (256, 2048), exp_time=exp_time , fps = 1 / exp_time,
+                    quantum_efficiencies=qe, wavelengths=lam, dtype=np.uint32)
+
+def make_kit_cmos(exp_time):
+    """Make a camera with CMOSIS CMV20000 chip (CMOS)."""
+    lam, qe = np.load(pkg_resources.resource_filename(__name__,
+                                                      'data/cmv20000_quantum_efficiencies.npy'))
+    lam = lam * q.m
+    # (3840,5120)
+    dark_current = (125 / q.s * exp_time).simplified.magnitude
+    return Camera(6.4 * q.um, .9, dark_current, 8., 12, (256,2048), exp_time=exp_time , fps = 1 / exp_time,
+                    quantum_efficiencies=qe, wavelengths=lam, dtype=np.uint16)
