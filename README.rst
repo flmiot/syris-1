@@ -1,7 +1,8 @@
 Warning!
-====
-| FORK: Please refer to https://github.com/ufo-kit/syris for the official Syris repository. I am not the author. |
+========
+| FORK: Please refer to https://github.com/ufo-kit/syris for the official Syris repository.  |
 | --- |
+
 
 
 Syris
