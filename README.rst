@@ -1,7 +1,7 @@
 Warning!
 ========
 
-> **FORK**: Please refer to the [official Syris repository](https://github.com/ufo-kit/syris)
+> **FORK**: Please refer to the official Syris repository at https://github.com/ufo-kit/syris
 
 
 Syris
