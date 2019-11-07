@@ -1,8 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-
-
 @author: otteflor
+
+Simulate the double sphere phantom from Peter Cloetens thesis:
+
+Contribution to Phase Contrast Imaging, Reconstruction and Tomography with Hard
+Synchrotron Radiation - Principles, Implementation and Applications
 """
 
 import os, sys
@@ -18,11 +21,11 @@ import logging
 
 from syris.physics import propagate
 from syris.bodies.base import CompositeBody
-from syris.bodies.mesh import Mesh, read_wavefront_obj
-from syris.devices.cameras import make_ehd_sc09000, make_kit_cmos
+from syris.bodies.mesh import Mesh
+from syris.devices.cameras import make_kit_cmos
 from syris.devices.detectors import Detector
 from syris.devices.lenses import Lens
-from syris.devices.filters import MaterialFilter, CdWO4, GaussianFilter, CrystalSurfaceArtefacts
+from syris.devices.filters import MaterialFilter, CdWO4, GaussianFilter
 from syris.devices.sources import make_topotomo, SpectraSource
 from syris.geometry import Trajectory
 from syris.experiments import Tomography
@@ -34,13 +37,14 @@ import tifffile as tf
 import syris.math as smath
 
 PLOT_AND_PAUSE = True
-OUTPUT = '/home/ubuntu/ownCloud/syris/simdata/raw/testing'
-OBJ_PATH = 'samples/double_sphere.dae'
+OUTPUT = 'output'
+OBJ_PATH = 'C:/Users/hambu/Git/syris-1/examples/data/double_sphere.dae'
+SPECTRA_FILE = "C:/Users/hambu/Git/syris-1/examples/data/20keV@5th_86p5m_fov_-10_10mm.dta"
 NO_OF_IMAGES = 10
 THETA_MIN = 0
 THETA_MAX = 180
 START_I = 0
-SUPERSAMPLING = 4
+SUPERSAMPLING = 1
 n = 2048 * SUPERSAMPLING
 PAUSE = 0.01 *q.sec
 EXPOSURE_TIME = 1000 * q.ms
@@ -93,12 +97,12 @@ pp = zip(pos_x.rescale(q.m).simplified.magnitude, pos_y.rescale(q.m).simplified.
 
 
 #spectra_file = "/home/ubuntu/ownCloud/spectra/u1_2m_lb/08keV@1st_70m_fov_-10_10mm_gap_tbdmm.dta"
-spectra_file = "/home/ubuntu/ownCloud/spectra/u1_2m_lb/20keV@5th_86p5m_fov_-10_10mm.dta"
+
 
 #source_trajectory = Trajectory([(n/2, n/2, 0)] * detector.pixel_size)
 source_trajectory = Trajectory(pp, velocity = vel )
 source_trajectory_stat = Trajectory([(n/2, n/2, 0)] * ps )
-undu = SpectraSource(spectra_file, DISTANCE, dE, (5, 140)*q.um, detector.pixel_size,
+undu = SpectraSource(SPECTRA_FILE, DISTANCE, dE, (5, 140)*q.um, detector.pixel_size,
                      source_trajectory, phase_profile = 'sphere', fluctuation = 0.06)
 undu.trajectory.bind(detector.pixel_size)
 #bm = make_topotomo(dE=dE, trajectory=source_trajectory, pixel_size=detector.pixel_size)
@@ -113,10 +117,10 @@ fltr = GaussianFilter(energies, energy * q.eV, sigma)
 meshes = read_collada(OBJ_PATH, [(n / 2, n / 2, 0)] * detector.pixel_size, iterations = 1)
 
 tr = Trajectory([(0 / 2, 0 / 2, 0)] * detector.pixel_size)
+
 cb = CompositeBody(tr, bodies = meshes)
 cb.bind_trajectory(detector.pixel_size)
 
-art = CrystalSurfaceArtefacts("mask04.bmp", source_trajectory)
 airm = get_material('air_dry.mat')
 cu = get_material('cu.mat')
 air_gap = MaterialFilter(3*q.m, airm)
