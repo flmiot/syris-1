@@ -4,11 +4,14 @@ a wavefield passes through them.
 """
 import numpy as np
 import quantities as q
+import pkg_resources
+from scipy.ndimage import imread, shift
 import scipy.interpolate as interp
 import syris.config as cfg
 from syris.opticalelements import OpticalElement
 from syris.physics import energy_to_wavelength
 from syris.util import get_gauss
+from syris.materials import make_henke
 
 
 class Filter(OpticalElement):
@@ -142,3 +145,59 @@ class Scintillator(MaterialFilter):
         ly = self.get_light_yield(energy)
 
         return absorbed * ly * energy.rescale(q.keV)
+
+
+class CdWO4(Scintillator):
+
+    def __init__(self, thickness, energies, material = None):
+        lam, em = np.load(pkg_resources.resource_filename(__name__,
+                                                          'data/cdwo4_emission_spectrum.npy'))
+        lam = lam * q.nm
+        em = em * 1 / q.nm
+        mat = make_henke('CdWo4', energies, density = 7.9 *q.g / (q.cm)**3, formula = 'CdWO4')
+        ly = 14 * np.ones(len(energies)) / q.keV
+        super(CdWO4, self).__init__(thickness, mat, ly, energies, em, lam, 1)
+
+
+class CrystalSurfaceArtefacts(OpticalElement):
+    def __init__(self, path, trajectory):
+        self.path = path
+        self.trajectory = trajectory
+
+        x = (np.arange(0, 2048) * 2 * q.um - 1024 * 2 * q.um).rescale(q.m)
+        y = (np.arange(0, 2048) * 2 * q.um - 1024 * 2 * q.um).rescale(q.m)
+        mask = imread(self.path) / 255. * 2
+        self._spline2d = interp.RectBivariateSpline(x,y,mask)
+
+    def get_next_time(self, t_0, distance):
+        """A filter doesn't move, this function returns infinity."""
+        return np.inf * q.s
+
+    def _transfer(self, shape, pixel_size, energy, offset, exponent=False, t=None, queue=None,
+                  out=None, check=True, block=False):
+        """Transfer function implementation.
+        """
+        if queue is None:
+            queue = cfg.OPENCL.queue
+        if out is None:
+            out = cl_array.zeros(queue, shape, dtype=cfg.PRECISION.np_cplx)
+
+        if t is None:
+            x, y, z = self.trajectory.control_points.simplified.magnitude[0]
+        else:
+            x, y, z = self.trajectory.get_point(t).simplified.magnitude
+        x += offset[1].simplified.magnitude
+        y += offset[0].simplified.magnitude
+        center = (x, y, z)
+
+        x = np.arange(0, shape[0]) * pixel_size[0] - center[0] * q.m
+        y = np.arange(0, shape[1]) * pixel_size[1] - center[1] * q.m
+        mask = self._spline2d(x, y)
+
+        mask_cl = cl_array.zeros(queue, shape, dtype=cfg.PRECISION.np_cplx)
+        mask_cl.set(mask.astype(cfg.PRECISION.np_cplx)  * 1j)
+
+        if not exponent:
+            mask_cl = clmath.exp(mask_cl, queue)
+
+        return mask_cl
