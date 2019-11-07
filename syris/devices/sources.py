@@ -309,20 +309,31 @@ class Wiggler(BendingMagnet):
 
 class SpectraSource(OpticalElement):
 
-    """ SpectraSource
-        (Abstract source type allowing for SPECTRA files used as source)
+    """This is not a physical source per se, but a way to use arbitrary precomputed
+    photon flux densities (2D) in syris. Input would be typically computed in SPECTRA
+    (Tanaka & Kitamura) and exported as angular flux density over cartesian mesh (*.dta).
+
+    Parameters are *filename* for spectra input, *sample_distance*, *dE*,
+    source size *size*, *pixel_size*, *trajectory*, *phase_profile*, and *fluctuation*.
+
+    SpectraSource makes use of 2D-spline interpolation and may thus be slower than the
+    other source types.
     """
 
-    def __init__(self, spectra_file, sample_distance, size, pixel_size, trajectory, phase_profile='plane'):
+    def __init__(self, filename, sample_distance, dE, size, pixel_size, trajectory,
+                 phase_profile='sphere', fluctuation = None):
 
         super(SpectraSource, self).__init__()
-        self.spectra_file = spectra_file
         self.sample_distance = sample_distance.simplified
+        self.dE = dE
         self.pixel_size = make_tuple(pixel_size, num_dims=2)
         self.size = size.simplified
         self.trajectory = trajectory
         self._phase_profile = None
         self.phase_profile = phase_profile
+        self.fluctuation = fluctuation
+        self._spline2d = self.import_spectra_file(filename)
+
 
     @property
     def phase_profile(self):
@@ -333,6 +344,13 @@ class SpectraSource(OpticalElement):
         if phase_profile not in ['plane', 'parabola', 'sphere']:
             raise XRaySourceError("Unknown phase profile: '{}'".format(phase_profile))
         self._phase_profile = phase_profile
+
+    def import_spectra_file(self, filename):
+        txt = np.loadtxt(filename, skiprows = 10, usecols = (0,1,2))
+        theta_x = np.unique(txt[:,0])
+        theta_y = np.unique(txt[:,1])
+        flux_density = np.reshape(txt[:,2], (len(theta_x), len(theta_y)))
+        return interp.RectBivariateSpline(theta_x,theta_y,flux_density)
 
     def get_next_time(self, t_0, distance):
         """Get the next time when the source will have moved more than *distance*."""
@@ -356,7 +374,7 @@ class SpectraSource(OpticalElement):
         cl_ps = gutil.make_vfloat2(*pixel_size.simplified.magnitude[::-1])
         fov = np.arange(0, shape[0]) * ps[0] - y * q.m
         angles = np.arctan((fov / self.sample_distance).simplified)
-        profile = self._load_vertical_profile().magnitude
+        profile = self._load_profile_2d(energy, shape, pixel_size, center).magnitude
 
         profile = cl_array.to_device(queue, profile.astype(cfg.PRECISION.np_float))
         if out is None:
@@ -402,11 +420,58 @@ class SpectraSource(OpticalElement):
 
         return out
 
-    def _load_vertical_profile(self):
-        angle_step = np.arctan(self.pixel_size.simplified[0] / self.sample_distance.simplified)
-        result = np.loadtxt(self.spectra_file, skiprows = 10, usecols = [2]) / q.s * angle_step * 0.0001
+    def _load_profile_2d(self, energy, shape, pixel_size, center):
+        if self._spline2d is None:
+            raise XRaySourceError("No spectra-file imported for SpectraSource.")
 
-        return result
+        # We import the photon flux _density_ from syris (ph/(s * mrad**2 * 0.1% B.W.),
+        # which we will have to convert for syris:
+        # 1.) Spatial:
+        # Photon flux densitiy is given per solid angle in mrad**2. For each pixel,
+        # we compute under which angle it appears as seen from the source.
+        # Once we obtained the flux densitiy at the position of each pixel, we multiply with
+        # each pixels corresponding solid angle. The soild angle for a pixel is computed as
+        # arctan((ppos_x - pixel_size / 2) / dis) - arctan((ppos_x + pixel_size / 2)/ dis) TIMES
+        # arctan((ppos_y - pixel_size / 2) / dis) - arctan((ppos_y + pixel_size / 2)/ dis)
+        # where *ppos_x/y* is the horizontal/vertical position of the pixel and *dis* the
+        # distance to source.
+        # 2.) Spectral
+        # Photon flux is given per 0.1% Bandwith (B.W.), so we correct by
+        # 1e3 * (dE / energy),
+        # where *dE* is step size of the input energy vector and *energy* the desired energy.
+
+        x = np.arange(0, shape[0]) * pixel_size[0] - center[0] * q.m
+        y = np.arange(0, shape[1]) * pixel_size[1] - center[1] * q.m
+        x_theta = np.arctan((x / self.sample_distance).simplified) * 1e3 # rad to mrad
+        y_theta = np.arctan((y / self.sample_distance).simplified) * 1e3
+
+        x_pixbord = np.arange(0, shape[0] + 1) * pixel_size[0] - center[0] * q.m - pixel_size[0] / 2
+        y_pixbord = np.arange(0, shape[1] + 1) * pixel_size[1] - center[1] * q.m - pixel_size[1] / 2
+        x_theta_pixbord = np.arctan((x_pixbord / self.sample_distance).simplified)
+        y_theta_pixbord = np.arctan((y_pixbord / self.sample_distance).simplified)
+        x_theta_angle = np.diff(x_theta_pixbord) * 1e3 # rad to mrad
+        y_theta_angle = np.diff(y_theta_pixbord) * 1e3 # rad to mrad
+
+        solid_angles = np.outer(y_theta_angle, x_theta_angle) * q.mrad**2
+
+
+        flux = (self._spline2d(x_theta, y_theta)  / q.s / q.mrad**2 * solid_angles).simplified
+        bw_conv = 1e3 * (self.dE / energy).simplified.magnitude
+
+        flucfactor = 1.0
+        if self.fluctuation is not None:
+            flucfactor = np.random.normal(loc = 1.0, scale = self.fluctuation)
+        return flux * bw_conv * flucfactor
+
+
+    def apply_blur(self, intensity, distance, pixel_size, queue=None, block=False):
+        """Apply source blur based on van Cittert-Zernike theorem at *distance*."""
+        fwhm = (distance * self.size / self.sample_distance).simplified
+        sigma = smath.fwnm_to_sigma(fwhm, n=2)
+        psf = ip.get_gauss_2d(intensity.shape, sigma, pixel_size=pixel_size, fourier=True,
+                              queue=queue, block=block)
+
+        return ip.ifft_2(ip.fft_2(intensity) * psf).real
 
 
 class XRaySourceError(Exception):
