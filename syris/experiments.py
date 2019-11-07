@@ -96,3 +96,107 @@ class Experiment(object):
                                                           amplifier_noise=amplifier_noise)
             LOG.debug('Image: {} -> {}'.format(t_0, t_0 + frame_time))
             yield camera_image
+
+
+class TomoExperiment( Experiment ):
+
+    """tbd"""
+
+    def __init__(self, sample, source, detector, propagation_distance, energies,
+                 sample_name = "sample"):
+        self.sample = sample
+        samples = [source]
+        samples.extend(sample)
+        self.sample_name = sample_name
+        super(TomoExperiment, self).__init__(samples, source, detector, propagation_distance, energies)
+
+    def rotate_sample( self, angle ):
+
+        self.sample.clear_transformation()
+        nx = self.detector.camera.shape[0]
+        ny = self.detector.camera.shape[1]
+        ps = self.detector.pixel_size
+
+
+        self.sample.rotate_all_mesh_triangles( angle , geom.Y_AX)
+
+    def make_tomography(self, projections, rotation, pause, num_ref_per_block = 1,
+                        num_proj_per_block = 1, num_dark_img = 1, shape=None,
+                        shot_noise=True, amplifier_noise=True, source_blur=True,
+                        queue=None):
+        """Make images for *angles*."""
+
+
+        angles = np.linspace(0, rotation, num = projections) * q.deg
+        angle_step_size = abs(angles[1] - angles[0])
+
+        """
+        # write scan log to file
+        scan_str = (
+        "energy={}/n"
+        "distance={}/n"
+        "ROI={}/n"
+        "eff_pix={}/n"
+        "projections={}/n"
+        "num_ref_per_block={}/n"
+        "ref_prefix=ref/n"
+        "num_proj_per_block{}/n"
+        "sample={}/n"
+        "rotation={}/n"
+        "pos_s_stage_z=0.0/n"
+        "angle_order=continuous/n"
+        "height_steps=1/n
+        "dark_prefix=dark/n"
+        "num_dark_img={}/n"
+        "exposure_time={}/n"
+        "proj_prefix=proj/n"
+        "off_axes=0/n"
+        )
+        scan_str.format(np.mean(self.energies),  self.propagation_distance,
+                   ",{},0,{},0".format(shape[0], shape[1]), self.detector.pixel_size,
+                   projections, num_ref_per_block, num_proj_per_block, self.sample_name,
+                   rotation, num_dark_img, self.detector.camera._exp_time)
+        with open("scan.log", "w") as text_file:
+            text_file.write(scan_str)
+        """
+
+        if queue is None:
+            queue = cfg.OPENCL.queue
+        shape_0 = self.detector.camera.shape
+        if shape is None:
+            shape = shape_0
+        ps_0 = self.detector.pixel_size
+        ps = shape_0[0] / float(shape[0]) * ps_0
+        fps = self.detector.camera.fps
+        frame_time = 1 / fps
+        step_time = pause + frame_time
+        t_start = 0*q.s
+        t_end = ( pause + frame_time ) * len(angles) * q.s
+        times = np.arange(t_start.simplified.magnitude, t_end.simplified.magnitude,
+                          step_time.simplified.magnitude) * q.s
+        image = cl_array.Array(queue, shape, dtype=cfg.PRECISION.np_float)
+        source_blur_kernel = None
+        #if source_blur:
+            #source_blur_kernel = self.make_source_blur(shape, ps, queue=queue, block=False)
+
+        for i, t_0 in enumerate(times):
+            image.fill(0)
+
+            t = t_0
+            t_next = self.get_next_time(t, ps)
+
+            # Turn sample
+            self.rotate_sample( angle_step_size )
+
+            while t_next < t_0 + frame_time:
+                LOG.debug('Motion blur: {} -> {}'.format(t, t_next))
+                image += self.compute_intensity(t, t_next, shape, ps)
+                t = t_next
+                t_next = self.get_next_time(t, ps)
+            image += self.compute_intensity(t, t_0 + frame_time, shape, ps)
+            #if source_blur:
+                #image = ip.ifft_2(ip.fft_2(image) * source_blur_kernel).real
+            camera_image = self.detector.camera.get_image(image, shot_noise=shot_noise,
+                                                          amplifier_noise=amplifier_noise)
+            LOG.debug('Image: {} -> {}'.format(t_0, t_0 + frame_time))
+            yield camera_image
